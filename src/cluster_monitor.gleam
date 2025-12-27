@@ -27,9 +27,12 @@ pub fn main() {
     }
     _ -> {
       // Get local IP and build node name: service_name@local_ip
+      io.println("Attempting to start distribution...")
       case get_local_ip() {
         Ok(local_ip) -> {
+          io.println("  Local IP: " <> local_ip)
           let node_name = cfg.service_name <> "@" <> local_ip
+          io.println("  Node name: " <> node_name)
           case start_distribution(node_name, cfg.erlang_cookie) {
             Ok(_) -> {
               io.println("Distribution started as: " <> node_name)
