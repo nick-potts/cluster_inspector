@@ -13,6 +13,7 @@ pub type Config {
     private_domain: String,
     service_name: String,
     gossip_interval_ms: Int,
+    erlang_cookie: String,
   )
 }
 
@@ -49,6 +50,10 @@ pub fn load() -> Config {
     |> result.try(int.parse)
     |> result.unwrap(5000)
 
+  let erlang_cookie =
+    envoy.get("ERLANG_COOKIE")
+    |> result.unwrap("cluster_monitor_dev_cookie")
+
   Config(
     port: port,
     host: host,
@@ -57,6 +62,7 @@ pub fn load() -> Config {
     private_domain: private_domain,
     service_name: service_name,
     gossip_interval_ms: gossip_interval_ms,
+    erlang_cookie: erlang_cookie,
   )
 }
 

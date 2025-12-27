@@ -1,11 +1,12 @@
 import cluster
+import cluster_supervisor
 import config
 import gleam/erlang/process
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/io
-import gossip
+import gleam/result
 import mist.{type Connection, type ResponseData}
 import web/router.{Context}
 
@@ -19,14 +20,38 @@ pub fn main() {
   io.println("  Port: " <> int.to_string(cfg.port))
   io.println("  Private Domain: " <> cfg.private_domain)
 
-  // Start the cluster actor
+  // Start Erlang distribution if on Railway (not localhost)
+  case cfg.private_domain {
+    "localhost" -> {
+      io.println("Local mode - skipping distribution")
+    }
+    _ -> {
+      // Build node name: service_name@private_domain
+      let node_name = cfg.service_name <> "@" <> cfg.private_domain
+      case start_distribution(node_name, cfg.erlang_cookie) {
+        Ok(_) -> {
+          io.println("Distribution started as: " <> node_name)
+
+          // Start DNS poll clustering
+          let _ =
+            cluster_supervisor.start(
+              cfg.private_domain,
+              cfg.service_name,
+              cfg.gossip_interval_ms,
+            )
+          io.println("DNS poll clustering started")
+        }
+        Error(reason) -> {
+          io.println("Warning: Failed to start distribution: " <> reason)
+        }
+      }
+    }
+  }
+
+  // Start the cluster actor (for metrics tracking)
   let assert Ok(started) = cluster.start(cfg)
   let cluster_subject = started.data
   io.println("Cluster actor started")
-
-  // Start the gossip loop
-  let _gossip = gossip.start_gossip_loop(cfg, cluster_subject)
-  io.println("Gossip loop started")
 
   // Create request context
   let ctx = Context(config: cfg, cluster: cluster_subject)
@@ -46,3 +71,16 @@ pub fn main() {
   // Keep the main process alive
   process.sleep_forever()
 }
+
+/// Start Erlang distribution with the given node name and cookie
+fn start_distribution(
+  node_name: String,
+  cookie: String,
+) -> Result(String, String) {
+  do_start_distribution(node_name, cookie)
+  |> result.map(fn(_) { node_name })
+  |> result.map_error(fn(_) { "Failed to start distribution" })
+}
+
+@external(erlang, "cluster_supervisor_ffi", "start_distribution")
+fn do_start_distribution(node_name: String, cookie: String) -> Result(Nil, Nil)
