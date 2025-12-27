@@ -4,19 +4,18 @@
     get_cpu_load/0,
     get_process_count/0,
     get_uptime_seconds/0,
-    get_system_info/0,
     ensure_os_mon_started/0
 ]).
 
 %% Ensure os_mon application is started
 ensure_os_mon_started() ->
     case application:ensure_all_started(os_mon) of
-        {ok, _} -> ok;
-        {error, _} -> ok  % May already be started
+        {ok, _} -> nil;
+        {error, _} -> nil  % May already be started
     end.
 
 %% Get memory information
-%% Returns {ok, {TotalMB, UsedMB, Percent}} or {error, unavailable}
+%% Returns {ok, {TotalMB, UsedMB, Percent}} or {error, nil}
 get_memory_info() ->
     try
         case memsup:get_system_memory_data() of
@@ -37,14 +36,14 @@ get_memory_info() ->
                 end,
                 {ok, {TotalMB, UsedMB, Percent}};
             _ ->
-                {error, unavailable}
+                {error, nil}
         end
     catch
-        _:_ -> {error, unavailable}
+        _:_ -> {error, nil}
     end.
 
 %% Get CPU load averages (1, 5, 15 min)
-%% Returns {ok, {Load1, Load5, Load15}} or {error, unavailable}
+%% Returns {ok, {Load1, Load5, Load15}} or {error, nil}
 %% Load values are percentages (0-100+)
 get_cpu_load() ->
     try
@@ -54,7 +53,7 @@ get_cpu_load() ->
         Load15 = cpu_sup:avg15() / 256.0 * 100.0,
         {ok, {Load1, Load5, Load15}}
     catch
-        _:_ -> {error, unavailable}
+        _:_ -> {error, nil}
     end.
 
 %% Get number of OS processes
@@ -71,12 +70,3 @@ get_process_count() ->
 get_uptime_seconds() ->
     {UpTime, _} = erlang:statistics(wall_clock),
     UpTime div 1000.
-
-%% Get combined system info for efficiency
-get_system_info() ->
-    ensure_os_mon_started(),
-    Memory = get_memory_info(),
-    Cpu = get_cpu_load(),
-    {ok, Procs} = get_process_count(),
-    Uptime = get_uptime_seconds(),
-    {Memory, Cpu, Procs, Uptime}.

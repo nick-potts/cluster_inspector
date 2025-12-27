@@ -1,6 +1,4 @@
-import gleam/dynamic.{type Dynamic}
-import gleam/erlang
-import gleam/float
+import gleam/dynamic/decode.{type Decoder}
 import gleam/int
 import gleam/json.{type Json}
 import gleam/result
@@ -37,85 +35,50 @@ pub type CpuLoad {
 @external(erlang, "metrics_ffi", "ensure_os_mon_started")
 pub fn ensure_os_mon_started() -> Nil
 
-/// Get memory info via FFI
+/// Get memory info via FFI - returns {ok, {Total, Used, Percent}} or {error, _}
 @external(erlang, "metrics_ffi", "get_memory_info")
-fn ffi_get_memory_info() -> Dynamic
+fn ffi_get_memory_info() -> Result(#(Int, Int, Float), Nil)
 
-/// Get CPU load via FFI
+/// Get CPU load via FFI - returns {ok, {Load1, Load5, Load15}} or {error, _}
 @external(erlang, "metrics_ffi", "get_cpu_load")
-fn ffi_get_cpu_load() -> Dynamic
+fn ffi_get_cpu_load() -> Result(#(Float, Float, Float), Nil)
 
 /// Get process count via FFI
 @external(erlang, "metrics_ffi", "get_process_count")
-fn ffi_get_process_count() -> Dynamic
+fn ffi_get_process_count() -> Result(Int, Nil)
 
 /// Get uptime via FFI
 @external(erlang, "metrics_ffi", "get_uptime_seconds")
 fn ffi_get_uptime_seconds() -> Int
 
+/// Get current system time in seconds
+@external(erlang, "erlang", "system_time")
+fn erlang_system_time(unit: SystemTimeUnit) -> Int
+
+pub type SystemTimeUnit {
+  Second
+}
+
 /// Get memory information
 pub fn get_memory_info() -> Result(MemoryInfo, Nil) {
-  let result = ffi_get_memory_info()
-  case decode_memory_result(result) {
-    Ok(info) -> Ok(info)
+  case ffi_get_memory_info() {
+    Ok(#(total, used, pct)) -> Ok(MemoryInfo(total, used, pct))
     Error(_) -> Error(Nil)
   }
-}
-
-fn decode_memory_result(dyn: Dynamic) -> Result(MemoryInfo, Nil) {
-  case dynamic.tuple2(dynamic.dynamic, dynamic.dynamic)(dyn) {
-    Ok(#(tag, data)) -> {
-      case dynamic.atom(tag) {
-        Ok(atom) if atom == erlang.Atom("ok") -> {
-          case dynamic.tuple3(dynamic.int, dynamic.int, dynamic.float)(data) {
-            Ok(#(total, used, pct)) -> Ok(MemoryInfo(total, used, pct))
-            Error(_) -> Error(Nil)
-          }
-        }
-        _ -> Error(Nil)
-      }
-    }
-    Error(_) -> Error(Nil)
-  }
-}
-
-fn erlang_atom(name: String) -> erlang.Atom {
-  erlang.Atom(name)
 }
 
 /// Get CPU load information
 pub fn get_cpu_load() -> Result(CpuLoad, Nil) {
-  let result = ffi_get_cpu_load()
-  case decode_cpu_result(result) {
-    Ok(load) -> Ok(load)
-    Error(_) -> Error(Nil)
-  }
-}
-
-fn decode_cpu_result(dyn: Dynamic) -> Result(CpuLoad, Nil) {
-  case dynamic.tuple2(dynamic.dynamic, dynamic.dynamic)(dyn) {
-    Ok(#(tag, data)) -> {
-      case dynamic.atom(tag) {
-        Ok(atom) if atom == erlang.Atom("ok") -> {
-          case
-            dynamic.tuple3(dynamic.float, dynamic.float, dynamic.float)(data)
-          {
-            Ok(#(l1, l5, l15)) -> Ok(CpuLoad(l1, l5, l15))
-            Error(_) -> Error(Nil)
-          }
-        }
-        _ -> Error(Nil)
-      }
-    }
+  case ffi_get_cpu_load() {
+    Ok(#(l1, l5, l15)) -> Ok(CpuLoad(l1, l5, l15))
     Error(_) -> Error(Nil)
   }
 }
 
 /// Get process count
 pub fn get_process_count() -> Int {
-  let result = ffi_get_process_count()
-  case dynamic.tuple2(dynamic.dynamic, dynamic.int)(result) {
-    Ok(#(_, count)) -> count
+  case ffi_get_process_count() {
+    Ok(count) -> count
     Error(_) -> 0
   }
 }
@@ -131,7 +94,7 @@ pub fn collect(replica_id: String, region: String, ip: String) -> NodeMetrics {
   let cpu = get_cpu_load() |> result.unwrap(CpuLoad(0.0, 0.0, 0.0))
   let procs = get_process_count()
   let uptime = get_uptime_seconds()
-  let timestamp = erlang.system_time(erlang.Second)
+  let timestamp = erlang_system_time(Second)
 
   NodeMetrics(
     replica_id: replica_id,
@@ -168,22 +131,33 @@ pub fn to_json(m: NodeMetrics) -> Json {
 }
 
 /// Decode metrics from JSON
-pub fn decoder() -> dynamic.Decoder(NodeMetrics) {
-  dynamic.decode12(
-    NodeMetrics,
-    dynamic.field("replica_id", dynamic.string),
-    dynamic.field("region", dynamic.string),
-    dynamic.field("ip_address", dynamic.string),
-    dynamic.field("memory_total_mb", dynamic.int),
-    dynamic.field("memory_used_mb", dynamic.int),
-    dynamic.field("memory_percent", dynamic.float),
-    dynamic.field("cpu_load_1", dynamic.float),
-    dynamic.field("cpu_load_5", dynamic.float),
-    dynamic.field("cpu_load_15", dynamic.float),
-    dynamic.field("process_count", dynamic.int),
-    dynamic.field("uptime_seconds", dynamic.int),
-    dynamic.field("timestamp", dynamic.int),
-  )
+pub fn decoder() -> Decoder(NodeMetrics) {
+  use replica_id <- decode.field("replica_id", decode.string)
+  use region <- decode.field("region", decode.string)
+  use ip_address <- decode.field("ip_address", decode.string)
+  use memory_total_mb <- decode.field("memory_total_mb", decode.int)
+  use memory_used_mb <- decode.field("memory_used_mb", decode.int)
+  use memory_percent <- decode.field("memory_percent", decode.float)
+  use cpu_load_1 <- decode.field("cpu_load_1", decode.float)
+  use cpu_load_5 <- decode.field("cpu_load_5", decode.float)
+  use cpu_load_15 <- decode.field("cpu_load_15", decode.float)
+  use process_count <- decode.field("process_count", decode.int)
+  use uptime_seconds <- decode.field("uptime_seconds", decode.int)
+  use timestamp <- decode.field("timestamp", decode.int)
+  decode.success(NodeMetrics(
+    replica_id:,
+    region:,
+    ip_address:,
+    memory_total_mb:,
+    memory_used_mb:,
+    memory_percent:,
+    cpu_load_1:,
+    cpu_load_5:,
+    cpu_load_15:,
+    process_count:,
+    uptime_seconds:,
+    timestamp:,
+  ))
 }
 
 /// Format uptime as human-readable string

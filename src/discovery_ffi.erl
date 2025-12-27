@@ -2,7 +2,7 @@
 -export([resolve_all_ips/1, get_local_ip/0]).
 
 %% Resolve a hostname to all its IP addresses
-%% Returns list of IP address strings
+%% Returns list of IP address strings (Gleam List(String))
 resolve_all_ips(Hostname) when is_binary(Hostname) ->
     resolve_all_ips(binary_to_list(Hostname));
 resolve_all_ips(Hostname) when is_list(Hostname) ->
@@ -21,16 +21,17 @@ resolve_all_ips(Hostname) when is_list(Hostname) ->
     end.
 
 %% Get local IP address
+%% Returns {ok, IpString} or {error, nil}
 get_local_ip() ->
     case inet:getif() of
         {ok, IfList} ->
             %% Find first non-loopback address
             case find_non_loopback(IfList) of
                 {ok, Ip} -> {ok, format_ip(Ip)};
-                error -> {error, not_found}
+                error -> {error, nil}
             end;
         {error, _} ->
-            {error, not_found}
+            {error, nil}
     end.
 
 find_non_loopback([]) ->
