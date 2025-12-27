@@ -32,20 +32,26 @@ fn gossip_loop(cfg: Config, cluster_actor: Subject(ClusterMessage)) -> Nil {
   let other_peers = discovery.filter_self(peers, self_ip)
 
   // Poll each peer (fire and forget via spawn)
-  list.each(other_peers, fn(peer_ip) {
-    process.spawn(fn() {
-      case fetch_peer_metrics(peer_ip, cfg.port) {
-        Ok(node_metrics) -> {
-          cluster.update_node(cluster_actor, node_metrics)
-        }
-        Error(_) -> {
-          // Peer unavailable, will be pruned if stale
-          Nil
-        }
-      }
-    })
-    Nil
-  })
+  // Skip gossip when running locally (no real peers)
+  case cfg.private_domain {
+    "localhost" -> Nil
+    _ -> {
+      list.each(other_peers, fn(peer_ip) {
+        process.spawn(fn() {
+          case fetch_peer_metrics(peer_ip, cfg.port) {
+            Ok(node_metrics) -> {
+              cluster.update_node(cluster_actor, node_metrics)
+            }
+            Error(_) -> {
+              // Peer unavailable, will be pruned if stale
+              Nil
+            }
+          }
+        })
+        Nil
+      })
+    }
+  }
 
   // Sleep until next tick
   process.sleep(cfg.gossip_interval_ms)
@@ -62,6 +68,14 @@ fn gossip_loop(cfg: Config, cluster_actor: Subject(ClusterMessage)) -> Nil {
 
 /// Fetch metrics from a peer node
 fn fetch_peer_metrics(peer_ip: String, port: Int) -> Result(NodeMetrics, Nil) {
+  // Skip empty IPs
+  case string.is_empty(peer_ip) {
+    True -> Error(Nil)
+    False -> do_fetch_peer_metrics(peer_ip, port)
+  }
+}
+
+fn do_fetch_peer_metrics(peer_ip: String, port: Int) -> Result(NodeMetrics, Nil) {
   // Build URL - handle IPv6 addresses
   let host = case string.contains(peer_ip, ":") {
     True -> "[" <> peer_ip <> "]"
@@ -72,20 +86,23 @@ fn fetch_peer_metrics(peer_ip: String, port: Int) -> Result(NodeMetrics, Nil) {
   case request.to(url) {
     Ok(req) -> {
       let req = request.set_header(req, "accept", "application/json")
+      send_request(req)
+    }
+    Error(_) -> Error(Nil)
+  }
+}
 
-      case httpc.send(req) {
-        Ok(resp) -> {
-          case resp.status {
-            200 -> {
-              case json.parse(resp.body, metrics.decoder()) {
-                Ok(node_metrics) -> Ok(node_metrics)
-                Error(_) -> Error(Nil)
-              }
-            }
-            _ -> Error(Nil)
+fn send_request(req) -> Result(NodeMetrics, Nil) {
+  case httpc.send(req) {
+    Ok(resp) -> {
+      case resp.status {
+        200 -> {
+          case json.parse(resp.body, metrics.decoder()) {
+            Ok(node_metrics) -> Ok(node_metrics)
+            Error(_) -> Error(Nil)
           }
         }
-        Error(_) -> Error(Nil)
+        _ -> Error(Nil)
       }
     }
     Error(_) -> Error(Nil)
