@@ -2,8 +2,8 @@ import cluster.{type Message as ClusterMessage}
 import config.{type Config}
 import discovery
 import gleam/erlang/process.{type Subject}
-import gleam/http/request
-import gleam/httpc
+import gleam/http/request.{type Request}
+import gleam/http/response.{type Response}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -93,7 +93,8 @@ fn do_fetch_peer_metrics(peer_ip: String, port: Int) -> Result(NodeMetrics, Nil)
 }
 
 fn send_request(req) -> Result(NodeMetrics, Nil) {
-  case httpc.send(req) {
+  // Use rescue to catch any unexpected errors from httpc
+  case safe_send(req) {
     Ok(resp) -> {
       case resp.status {
         200 -> {
@@ -108,3 +109,6 @@ fn send_request(req) -> Result(NodeMetrics, Nil) {
     Error(_) -> Error(Nil)
   }
 }
+
+@external(erlang, "gossip_ffi", "safe_send")
+fn safe_send(req: Request(String)) -> Result(Response(String), Nil)
