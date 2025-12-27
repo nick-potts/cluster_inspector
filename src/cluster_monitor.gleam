@@ -26,23 +26,32 @@ pub fn main() {
       io.println("Local mode - skipping distribution")
     }
     _ -> {
-      // Build node name: service_name@private_domain
-      let node_name = cfg.service_name <> "@" <> cfg.private_domain
-      case start_distribution(node_name, cfg.erlang_cookie) {
-        Ok(_) -> {
-          io.println("Distribution started as: " <> node_name)
+      // Get local IP and build node name: service_name@local_ip
+      case get_local_ip() {
+        Ok(local_ip) -> {
+          let node_name = cfg.service_name <> "@" <> local_ip
+          case start_distribution(node_name, cfg.erlang_cookie) {
+            Ok(_) -> {
+              io.println("Distribution started as: " <> node_name)
 
-          // Start DNS poll clustering
-          let _ =
-            cluster_supervisor.start(
-              cfg.private_domain,
-              cfg.service_name,
-              cfg.gossip_interval_ms,
-            )
-          io.println("DNS poll clustering started")
+              // Start DNS poll clustering
+              let _ =
+                cluster_supervisor.start(
+                  cfg.private_domain,
+                  cfg.service_name,
+                  cfg.gossip_interval_ms,
+                )
+              io.println("DNS poll clustering started")
+            }
+            Error(reason) -> {
+              io.println("Warning: Failed to start distribution: " <> reason)
+            }
+          }
         }
-        Error(reason) -> {
-          io.println("Warning: Failed to start distribution: " <> reason)
+        Error(_) -> {
+          io.println(
+            "Warning: Could not determine local IP, skipping distribution",
+          )
         }
       }
     }
@@ -84,3 +93,11 @@ fn start_distribution(
 
 @external(erlang, "cluster_supervisor_ffi", "start_distribution")
 fn do_start_distribution(node_name: String, cookie: String) -> Result(Nil, Nil)
+
+/// Get the local IP address for this node
+fn get_local_ip() -> Result(String, Nil) {
+  do_get_local_ip()
+}
+
+@external(erlang, "cluster_supervisor_ffi", "get_local_ip")
+fn do_get_local_ip() -> Result(String, Nil)

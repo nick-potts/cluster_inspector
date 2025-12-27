@@ -1,5 +1,5 @@
 -module(cluster_supervisor_ffi).
--export([poll_and_connect/2, start_distribution/2, format_nodes/1]).
+-export([poll_and_connect/2, start_distribution/2, format_nodes/1, get_local_ip/0]).
 
 %% Format list of nodes as string
 format_nodes(Nodes) ->
@@ -55,8 +55,9 @@ format_ip({A, B, C, D, E, F, G, H}) ->
                                 [A, B, C, D, E, F, G, H])).
 
 %% Start Erlang distribution with the given node name and cookie
+%% Use longnames since Railway hostnames contain dots (e.g., x.railway.internal)
 start_distribution(NodeName, Cookie) ->
-    case net_kernel:start([binary_to_atom(NodeName, utf8), shortnames]) of
+    case net_kernel:start([binary_to_atom(NodeName, utf8), longnames]) of
         {ok, _Pid} ->
             erlang:set_cookie(node(), binary_to_atom(Cookie, utf8)),
             {ok, node()};
@@ -66,3 +67,58 @@ start_distribution(NodeName, Cookie) ->
         {error, Reason} ->
             {error, Reason}
     end.
+
+%% Get the local IP address by getting hostname and resolving it
+get_local_ip() ->
+    case inet:gethostname() of
+        {ok, Hostname} ->
+            %% Try to resolve our hostname to get our IP
+            case inet:getaddr(Hostname, inet6) of
+                {ok, Ip} -> 
+                    {ok, list_to_binary(format_ip(Ip))};
+                {error, _} ->
+                    case inet:getaddr(Hostname, inet) of
+                        {ok, Ip} -> 
+                            {ok, list_to_binary(format_ip(Ip))};
+                        {error, _} ->
+                            %% Fallback: try to get any non-loopback interface
+                            get_local_ip_from_interfaces()
+                    end
+            end;
+        {error, _} ->
+            get_local_ip_from_interfaces()
+    end.
+
+%% Fallback: get IP from network interfaces
+get_local_ip_from_interfaces() ->
+    case inet:getif() of
+        {ok, IfList} ->
+            case find_non_loopback_ipv6(IfList) of
+                {ok, Ip} -> {ok, list_to_binary(format_ip(Ip))};
+                error ->
+                    case find_non_loopback_ipv4(IfList) of
+                        {ok, Ip} -> {ok, list_to_binary(format_ip(Ip))};
+                        error -> {error, nil}
+                    end
+            end;
+        {error, _} ->
+            {error, nil}
+    end.
+
+find_non_loopback_ipv6([]) -> error;
+find_non_loopback_ipv6([{{0,0,0,0,0,0,0,1}, _, _} | Rest]) ->
+    find_non_loopback_ipv6(Rest);
+find_non_loopback_ipv6([{Ip = {_,_,_,_,_,_,_,_}, _, _} | _]) ->
+    {ok, Ip};
+find_non_loopback_ipv6([_ | Rest]) ->
+    find_non_loopback_ipv6(Rest).
+
+find_non_loopback_ipv4([]) -> error;
+find_non_loopback_ipv4([{{127,_,_,_}, _, _} | Rest]) ->
+    find_non_loopback_ipv4(Rest);
+find_non_loopback_ipv4([{{0,0,0,0}, _, _} | Rest]) ->
+    find_non_loopback_ipv4(Rest);
+find_non_loopback_ipv4([{Ip = {_,_,_,_}, _, _} | _]) ->
+    {ok, Ip};
+find_non_loopback_ipv4([_ | Rest]) ->
+    find_non_loopback_ipv4(Rest).
