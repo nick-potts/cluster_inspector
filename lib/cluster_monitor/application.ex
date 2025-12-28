@@ -9,9 +9,8 @@ defmodule ClusterMonitor.Application do
   def start(_type, _args) do
     children = [
       ClusterMonitorWeb.Telemetry,
-      {DNSCluster,
-       query: Application.get_env(:cluster_monitor, :dns_cluster_query) || :ignore,
-       log: :info},
+      {ClusterMonitor.RailwayCluster,
+       query: Application.get_env(:cluster_monitor, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ClusterMonitor.PubSub},
       # Start a worker by calling: ClusterMonitor.Worker.start_link(arg)
       # {ClusterMonitor.Worker, arg},
