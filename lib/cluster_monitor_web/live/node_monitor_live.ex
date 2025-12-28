@@ -74,7 +74,9 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
       disks when is_list(disks) ->
         Enum.map(disks, fn {mount, size_kb, percent_used} ->
-          %{mount: to_string(mount), size_kb: size_kb, percent_used: percent_used}
+          total = size_kb * 1024
+          used = trunc(total * percent_used / 100)
+          %{mount: to_string(mount), total: total, used: used, percent_used: percent_used}
         end)
     end
   end
@@ -176,11 +178,12 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
         <.stat_section title="Disk">
           <%= if @node.disk && length(@node.disk) > 0 do %>
-            <div class="space-y-2">
+            <div class="space-y-3">
               <div :for={disk <- @node.disk} class="text-sm">
-                <div class="flex justify-between">
-                  <span class="font-mono">{disk.mount}</span>
-                  <span>{disk.percent_used}% used</span>
+                <div class="font-mono mb-1">{disk.mount}</div>
+                <div class="flex justify-between mb-1">
+                  <span>{format_bytes(disk.used)} / {format_bytes(disk.total)}</span>
+                  <span>{disk.percent_used}%</span>
                 </div>
                 <progress
                   class={"progress w-full #{if disk.percent_used > 90, do: "progress-error", else: "progress-primary"}"}
