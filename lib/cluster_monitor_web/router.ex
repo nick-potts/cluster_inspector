@@ -17,7 +17,7 @@ defmodule ClusterMonitorWeb.Router do
   scope "/", ClusterMonitorWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
+    live "/", NodeMonitorLive
   end
 
   # Other scopes may use custom stacks.
