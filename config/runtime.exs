@@ -33,10 +33,11 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host = System.get_env("PHX_HOST") || System.get_env("RAILWAY_PUBLIC_DOMAIN") || "example.com"
   port = String.to_integer(System.get_env("PORT") || "4000")
 
-  config :cluster_monitor, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
+  config :cluster_monitor, :dns_cluster_query,
+    System.get_env("DNS_CLUSTER_QUERY") || System.get_env("RAILWAY_PRIVATE_DOMAIN")
 
   config :cluster_monitor, ClusterMonitorWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
