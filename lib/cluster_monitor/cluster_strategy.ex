@@ -1,0 +1,75 @@
+defmodule ClusterMonitor.DNSPollIPv6 do
+  @moduledoc """
+  DNS polling strategy for Railway with proper IPv6 bracket notation.
+  """
+  use Cluster.Strategy
+  alias Cluster.Strategy.State
+
+  @default_polling_interval 5_000
+
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, opts)
+  end
+
+  def init([%State{config: config} = state]) do
+    query = Keyword.fetch!(config, :query)
+    basename = Keyword.fetch!(config, :node_basename)
+    interval = Keyword.get(config, :polling_interval, @default_polling_interval)
+
+    state = %State{state | meta: %{query: query, basename: basename, interval: interval}}
+
+    {:ok, state, 0}
+  end
+
+  def handle_info(:timeout, state), do: handle_info(:poll, state)
+
+  def handle_info(:poll, %State{meta: %{query: query, basename: basename, interval: interval}} = state) do
+    nodes = discover_nodes(query, basename)
+
+    new_state =
+      case Cluster.Strategy.connect_nodes(state.topology, state.connect, state.list_nodes, nodes) do
+        :ok -> state
+        {:error, bad_nodes} ->
+          Enum.each(bad_nodes, fn {node, reason} ->
+            Cluster.Logger.warn(state.topology, "unable to connect to #{node}: #{inspect(reason)}")
+          end)
+          state
+      end
+
+    Process.send_after(self(), :poll, interval)
+    {:noreply, new_state}
+  end
+
+  def handle_info(_, state), do: {:noreply, state}
+
+  defp discover_nodes(query, basename) do
+    # Get IPv6 addresses
+    ipv6 = dns_lookup(query, :aaaa) |> Enum.map(&format_ipv6_node(&1, basename))
+
+    # Get IPv4 addresses as fallback
+    ipv4 = dns_lookup(query, :a) |> Enum.map(&format_ipv4_node(&1, basename))
+
+    # Prefer IPv6, dedupe, remove self
+    (ipv6 ++ ipv4)
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 == node()))
+  end
+
+  defp dns_lookup(query, type) do
+    case :inet_res.getbyname(~c"#{query}", type) do
+      {:ok, {:hostent, _, _, _, _, addrs}} ->
+        Enum.map(addrs, &:inet.ntoa/1) |> Enum.map(&to_string/1)
+      {:error, _} ->
+        []
+    end
+  end
+
+  defp format_ipv6_node(ip, basename) do
+    # IPv6 addresses need brackets in Erlang node names
+    :"#{basename}@[#{ip}]"
+  end
+
+  defp format_ipv4_node(ip, basename) do
+    :"#{basename}@#{ip}"
+  end
+end

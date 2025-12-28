@@ -42,7 +42,7 @@ if config_env() == :prod do
   if dns_query do
     config :cluster_monitor, :cluster_topologies,
       railway: [
-        strategy: Cluster.Strategy.DNSPoll,
+        strategy: ClusterMonitor.DNSPollIPv6,
         config: [
           polling_interval: 5_000,
           query: dns_query,
