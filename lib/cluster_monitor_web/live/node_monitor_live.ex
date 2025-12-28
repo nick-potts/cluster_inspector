@@ -32,14 +32,16 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
   end
 
   defp get_memory(n) do
-    case :rpc.call(n, :erlang, :memory, [], 5_000) do
+    case :rpc.call(n, :memsup, :get_system_memory_data, [], 5_000) do
       {:badrpc, _} ->
         nil
 
       mem when is_list(mem) ->
-        total = Keyword.get(mem, :total, 0)
-        processes = Keyword.get(mem, :processes, 0)
-        %{total: total, processes: processes}
+        total = Keyword.get(mem, :total_memory, 0)
+        free = Keyword.get(mem, :free_memory, 0)
+        available = Keyword.get(mem, :available_memory, free)
+        used = total - available
+        %{total: total, used: used, percent: if(total > 0, do: Float.round(used / total * 100, 1), else: 0)}
     end
   end
 
@@ -121,18 +123,31 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
         <.stat_section title="Memory">
           <%= if @node.memory do %>
-            <div class="stat-value text-lg">{format_bytes(@node.memory.total)}</div>
-            <div class="text-sm opacity-70">
-              Processes: {format_bytes(@node.memory.processes)}
+            <div class="flex justify-between text-sm mb-1">
+              <span>{format_bytes(@node.memory.used)} / {format_bytes(@node.memory.total)}</span>
+              <span>{@node.memory.percent}%</span>
             </div>
+            <progress
+              class={"progress w-full #{if @node.memory.percent > 90, do: "progress-error", else: "progress-primary"}"}
+              value={@node.memory.percent}
+              max="100"
+            />
           <% else %>
-            <div class="text-sm opacity-50">Unavailable</div>
+            <div class="text-sm opacity-50">Unavailable (os_mon not running)</div>
           <% end %>
         </.stat_section>
 
         <.stat_section title="CPU">
           <%= if @node.cpu do %>
-            <div class="stat-value text-lg">{Float.round(@node.cpu, 1)}%</div>
+            <div class="flex justify-between text-sm mb-1">
+              <span>Usage</span>
+              <span>{Float.round(@node.cpu, 1)}%</span>
+            </div>
+            <progress
+              class={"progress w-full #{if @node.cpu > 90, do: "progress-error", else: "progress-primary"}"}
+              value={@node.cpu}
+              max="100"
+            />
           <% else %>
             <div class="text-sm opacity-50">Unavailable (os_mon not running)</div>
           <% end %>
