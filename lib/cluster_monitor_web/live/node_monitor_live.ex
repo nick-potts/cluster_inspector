@@ -76,15 +76,15 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
       disks when is_list(disks) ->
         disks
-        |> Enum.filter(fn {mount, _size_kb, _percent} ->
+        |> Enum.reject(fn {mount, _size_kb, _percent} ->
           mount_str = to_string(mount)
-          # Only show real filesystems, filter out virtual/system mounts
-          mount_str == "/" or
-            String.starts_with?(mount_str, "/home") or
-            String.starts_with?(mount_str, "/data") or
-            String.starts_with?(mount_str, "/var") or
-            String.starts_with?(mount_str, "/mnt") or
-            String.starts_with?(mount_str, "/Volumes")
+          # Filter out virtual/system mounts
+          String.starts_with?(mount_str, "/dev") or
+            String.starts_with?(mount_str, "/proc") or
+            String.starts_with?(mount_str, "/sys") or
+            String.starts_with?(mount_str, "/run") or
+            String.starts_with?(mount_str, "/etc/") or
+            String.starts_with?(mount_str, "/snap")
         end)
         |> Enum.map(fn {mount, size_kb, percent_used} ->
           total = size_kb * 1024
