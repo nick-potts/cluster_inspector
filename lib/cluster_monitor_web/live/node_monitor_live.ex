@@ -23,10 +23,6 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: new_samples, loading: false)}
   end
 
-  defp init_cpu_history(nodes) do
-    Map.new(nodes, fn node -> {node.name, []} end)
-  end
-
   defp update_cpu_history(history, nodes) do
     Enum.reduce(nodes, history, fn node, acc ->
       cpu_val = if node.cpu && node.cpu.util, do: node.cpu.util, else: 0
@@ -36,30 +32,40 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     end)
   end
 
-  defp fetch_all_nodes(prev_samples) do
-    {nodes, _} = fetch_all_nodes_with_cpu(prev_samples)
-    nodes
-  end
-
   defp fetch_all_nodes_with_cpu(prev_samples) do
     node_list = [node() | Node.list()]
 
-    {nodes, new_samples} =
-      Enum.map_reduce(node_list, prev_samples, fn n, samples ->
-        {cpu, new_sample} = get_cpu_with_sample(n, Map.get(samples, n))
+    # Fetch all nodes in parallel - critical for global deployments
+    results =
+      node_list
+      |> Task.async_stream(
+        fn n ->
+          {cpu, new_sample} = get_cpu_with_sample(n, Map.get(prev_samples, n))
 
-        node_data = %{
-          name: n,
-          memory: get_memory(n),
-          cpu: cpu,
-          disk: get_disk(n),
-          containers: get_containers(n),
-          system: get_system_info(n),
-          network: get_network_info(n)
-        }
+          node_data = %{
+            name: n,
+            memory: get_memory(n),
+            cpu: cpu,
+            disk: get_disk(n),
+            containers: get_containers(n),
+            system: get_system_info(n),
+            network: get_network_info(n)
+          }
 
-        {node_data, Map.put(samples, n, new_sample)}
+          {node_data, new_sample}
+        end,
+        max_concurrency: 100,
+        timeout: 10_000,
+        on_timeout: :kill_task
+      )
+      |> Enum.map(fn
+        {:ok, {node_data, sample}} -> {node_data, sample}
+        {:exit, _} -> nil
       end)
+      |> Enum.reject(&is_nil/1)
+
+    nodes = Enum.map(results, &elem(&1, 0))
+    new_samples = Map.new(results, fn {node_data, sample} -> {node_data.name, sample} end)
 
     {nodes, new_samples}
   end
