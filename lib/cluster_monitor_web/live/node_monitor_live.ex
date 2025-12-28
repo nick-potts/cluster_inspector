@@ -1,7 +1,8 @@
 defmodule ClusterMonitorWeb.NodeMonitorLive do
   use ClusterMonitorWeb, :live_view
 
-  @refresh_interval 2_000
+  @refresh_interval 250
+  @cpu_history_size 60
 
   @impl true
   def mount(_params, _session, socket) do
@@ -9,12 +10,30 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
       :timer.send_interval(@refresh_interval, self(), :refresh)
     end
 
-    {:ok, assign(socket, nodes: fetch_all_nodes())}
+    nodes = fetch_all_nodes()
+    cpu_history = init_cpu_history(nodes)
+
+    {:ok, assign(socket, nodes: nodes, cpu_history: cpu_history)}
   end
 
   @impl true
   def handle_info(:refresh, socket) do
-    {:noreply, assign(socket, nodes: fetch_all_nodes())}
+    nodes = fetch_all_nodes()
+    cpu_history = update_cpu_history(socket.assigns.cpu_history, nodes)
+    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history)}
+  end
+
+  defp init_cpu_history(nodes) do
+    Map.new(nodes, fn node -> {node.name, []} end)
+  end
+
+  defp update_cpu_history(history, nodes) do
+    Enum.reduce(nodes, history, fn node, acc ->
+      cpu_val = if node.cpu && node.cpu.util, do: node.cpu.util, else: 0
+      node_history = Map.get(acc, node.name, [])
+      new_history = Enum.take([cpu_val | node_history], @cpu_history_size)
+      Map.put(acc, node.name, new_history)
+    end)
   end
 
   defp fetch_all_nodes do
@@ -43,7 +62,12 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
         free = Keyword.get(mem, :free_memory, 0)
         available = Keyword.get(mem, :available_memory, free)
         used = total - available
-        %{total: total, used: used, percent: if(total > 0, do: Float.round(used / total * 100, 1), else: 0)}
+
+        %{
+          total: total,
+          used: used,
+          percent: if(total > 0, do: Float.round(used / total * 100, 1), else: 0)
+        }
     end
   end
 
@@ -95,7 +119,13 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
   end
 
   defp get_containers(n) do
-    case :rpc.call(n, System, :cmd, ["docker", ["ps", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"]], 5_000) do
+    case :rpc.call(
+           n,
+           System,
+           :cmd,
+           ["docker", ["ps", "--format", "{{.Names}}\t{{.Status}}\t{{.Image}}"]],
+           5_000
+         ) do
       {:badrpc, _} ->
         nil
 
@@ -228,7 +258,10 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
   end
 
   defp format_number(nil), do: "N/A"
-  defp format_number(n) when is_integer(n) and n >= 1_000_000, do: "#{Float.round(n / 1_000_000, 1)}M"
+
+  defp format_number(n) when is_integer(n) and n >= 1_000_000,
+    do: "#{Float.round(n / 1_000_000, 1)}M"
+
   defp format_number(n) when is_integer(n) and n >= 1_000, do: "#{Float.round(n / 1_000, 1)}K"
   defp format_number(n) when is_integer(n), do: Integer.to_string(n)
 
@@ -250,13 +283,14 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
       <h1 class="text-2xl font-bold">Cluster Node Monitor</h1>
 
       <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        <.node_card :for={node <- @nodes} node={node} />
+        <.node_card :for={node <- @nodes} node={node} cpu_history={Map.get(@cpu_history, node.name, [])} />
       </div>
     </div>
     """
   end
 
-  attr :node, :map, required: true
+  attr(:node, :map, required: true)
+  attr(:cpu_history, :list, required: true)
 
   defp node_card(assigns) do
     ~H"""
@@ -344,22 +378,11 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
         <.stat_section title="CPU">
           <%= if @node.cpu do %>
-            <%= if @node.cpu.cores do %>
-              <div class="text-sm mb-2">{@node.cpu.cores} cores</div>
-            <% end %>
-            <%= if @node.cpu.util do %>
-              <div class="flex justify-between text-sm mb-1">
-                <span>Usage</span>
-                <span>{Float.round(@node.cpu.util, 1)}%</span>
-              </div>
-              <progress
-                class={"progress w-full #{if @node.cpu.util > 90, do: "progress-error", else: "progress-primary"}"}
-                value={@node.cpu.util}
-                max="100"
-              />
-            <% else %>
-              <div class="text-sm opacity-50">Usage unavailable</div>
-            <% end %>
+            <div class="flex justify-between text-sm mb-2">
+              <span>{@node.cpu.cores} cores</span>
+              <span class={"font-mono #{if @node.cpu.util && @node.cpu.util > 90, do: "text-error", else: ""}"}>{if @node.cpu.util, do: "#{Float.round(@node.cpu.util, 1)}%", else: "N/A"}</span>
+            </div>
+            <.cpu_graph history={@cpu_history} />
           <% else %>
             <div class="text-sm opacity-50">Unavailable</div>
           <% end %>
@@ -402,8 +425,8 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     """
   end
 
-  slot :inner_block, required: true
-  attr :title, :string, required: true
+  slot(:inner_block, required: true)
+  attr(:title, :string, required: true)
 
   defp stat_section(assigns) do
     ~H"""
@@ -412,5 +435,56 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
       {render_slot(@inner_block)}
     </div>
     """
+  end
+
+  attr(:history, :list, required: true)
+
+  defp cpu_graph(assigns) do
+    # Reverse so oldest is first (left side of graph)
+    history = Enum.reverse(assigns.history)
+    points = build_svg_points(history, 200, 40)
+
+    assigns = assign(assigns, points: points, history: history)
+
+    ~H"""
+    <div class="w-full h-32 bg-base-300 rounded overflow-hidden">
+      <svg viewBox="0 0 200 40" preserveAspectRatio="none" class="w-full h-full">
+        <!-- Grid lines -->
+        <line x1="0" y1="20" x2="200" y2="20" stroke="currentColor" stroke-opacity="0.1" />
+        <!-- Fill area -->
+        <%= if length(@history) > 1 do %>
+          <polygon
+            points={"0,40 #{@points} 200,40"}
+            fill="currentColor"
+            class="text-primary opacity-30"
+          />
+          <polyline
+            points={@points}
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            class="text-primary"
+          />
+        <% end %>
+      </svg>
+    </div>
+    """
+  end
+
+  defp build_svg_points(history, width, height) do
+    count = length(history)
+
+    if count < 2 do
+      ""
+    else
+      history
+      |> Enum.with_index()
+      |> Enum.map(fn {val, i} ->
+        x = i / (count - 1) * width
+        y = height - val / 100 * height
+        "#{Float.round(x, 1)},#{Float.round(y, 1)}"
+      end)
+      |> Enum.join(" ")
+    end
   end
 end
