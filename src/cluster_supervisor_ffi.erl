@@ -57,6 +57,14 @@ format_ip({A, B, C, D, E, F, G, H}) ->
 %% Start Erlang distribution with the given node name and cookie
 %% Use longnames since Railway hostnames contain dots (e.g., x.railway.internal)
 start_distribution(NodeName, Cookie) ->
+    %% First, ensure EPMD is running (it's needed for distribution)
+    ensure_epmd_started(),
+    
+    %% Set kernel inet_dist_listen options to use a fixed port range
+    %% This ensures nodes can connect to each other on known ports
+    application:set_env(kernel, inet_dist_listen_min, 9100),
+    application:set_env(kernel, inet_dist_listen_max, 9200),
+    
     case net_kernel:start([binary_to_atom(NodeName, utf8), longnames]) of
         {ok, _Pid} ->
             erlang:set_cookie(node(), binary_to_atom(Cookie, utf8)),
@@ -66,6 +74,25 @@ start_distribution(NodeName, Cookie) ->
             {ok, node()};
         {error, Reason} ->
             {error, Reason}
+    end.
+
+%% Ensure EPMD is started - it's required for Erlang distribution
+ensure_epmd_started() ->
+    case erl_epmd:names() of
+        {ok, _} ->
+            %% EPMD is already running
+            ok;
+        {error, _} ->
+            %% Try to start EPMD as a daemon
+            case os:find_executable("epmd") of
+                false ->
+                    %% EPMD not found in path, try common locations
+                    ok;
+                EpmdPath ->
+                    %% Start EPMD as a daemon
+                    os:cmd(EpmdPath ++ " -daemon"),
+                    timer:sleep(500) % Give it time to start
+            end
     end.
 
 %% Get the local IP address by getting hostname and resolving it
