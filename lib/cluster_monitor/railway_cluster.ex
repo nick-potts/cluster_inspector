@@ -20,7 +20,9 @@ defmodule ClusterMonitor.RailwayCluster do
 
     if query && query != :ignore do
       Logger.info("[RailwayCluster] Starting with query: #{query}")
+      Logger.info("[RailwayCluster] RAILWAY_PRIVATE_DOMAIN=#{System.get_env("RAILWAY_PRIVATE_DOMAIN")}")
       Logger.info("[RailwayCluster] Current node: #{node()}")
+      Logger.info("[RailwayCluster] Cookie: #{Node.get_cookie()}")
       schedule_poll(0)
       {:ok, %{query: query, known_nodes: MapSet.new()}}
     else
@@ -91,6 +93,19 @@ defmodule ClusterMonitor.RailwayCluster do
   end
 
   defp try_connect(node_name) do
+    Logger.info("[RailwayCluster] Trying to connect to #{node_name}...")
+
+    # Try to ping EPMD first
+    ip = node_name |> to_string() |> String.split("@") |> List.last()
+    Logger.info("[RailwayCluster] Checking EPMD on #{ip}")
+
+    case :net_adm.names(~c"#{String.trim(ip, "[]")}") do
+      {:ok, names} ->
+        Logger.info("[RailwayCluster] EPMD names on #{ip}: #{inspect(names)}")
+      {:error, reason} ->
+        Logger.warning("[RailwayCluster] Cannot reach EPMD on #{ip}: #{inspect(reason)}")
+    end
+
     case Node.connect(node_name) do
       true ->
         Logger.info("[RailwayCluster] Connected to #{node_name}")
