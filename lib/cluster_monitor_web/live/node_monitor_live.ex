@@ -12,15 +12,14 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
       send(self(), :refresh)
     end
 
-    # Start with empty state - data loads async after connect
-    {:ok, assign(socket, nodes: [], cpu_history: %{}, cpu_samples: %{}, loading: true)}
+    {:ok, assign(socket, nodes: [], cpu_history: %{}, cpu_samples: %{})}
   end
 
   @impl true
   def handle_info(:refresh, socket) do
     {nodes, new_samples} = fetch_all_nodes_with_cpu(socket.assigns.cpu_samples)
     cpu_history = update_cpu_history(socket.assigns.cpu_history, nodes)
-    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: new_samples, loading: false)}
+    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: new_samples)}
   end
 
   defp update_cpu_history(history, nodes) do
@@ -309,18 +308,11 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     <div class="space-y-6">
       <h1 class="text-2xl font-bold">Cluster Node Monitor</h1>
 
-      <%= if @loading do %>
-        <div class="flex items-center justify-center py-12">
-          <span class="loading loading-spinner loading-lg"></span>
-          <span class="ml-3 text-lg">Loading cluster data...</span>
-        </div>
-      <% else %>
-        <.cluster_summary summary={@summary} />
+      <.cluster_summary summary={@summary} />
 
-        <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-          <.node_card :for={node <- @nodes} node={node} cpu_history={Map.get(@cpu_history, node.name, [])} />
-        </div>
-      <% end %>
+      <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <.node_card :for={node <- @nodes} node={node} cpu_history={Map.get(@cpu_history, node.name, [])} />
+      </div>
     </div>
     """
   end
@@ -358,6 +350,27 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     mem_min = if length(mem_percents) > 0, do: Enum.min(mem_percents), else: nil
     mem_max = if length(mem_percents) > 0, do: Enum.max(mem_percents), else: nil
 
+    # Per-host memory stats (for binpacking insight)
+    mem_available_list = Enum.map(mem_stats, fn m -> m.total - m.used end)
+    mem_total_list = Enum.map(mem_stats, & &1.total)
+    mem_used_list = Enum.map(mem_stats, & &1.used)
+
+    mem_available_avg = if length(mem_available_list) > 0, do: div(Enum.sum(mem_available_list), length(mem_available_list)), else: nil
+    mem_available_median = median(mem_available_list)
+    mem_available_min = if length(mem_available_list) > 0, do: Enum.min(mem_available_list), else: nil
+    mem_available_max = if length(mem_available_list) > 0, do: Enum.max(mem_available_list), else: nil
+
+    # Host size stats
+    mem_host_min = if length(mem_total_list) > 0, do: Enum.min(mem_total_list), else: nil
+    mem_host_max = if length(mem_total_list) > 0, do: Enum.max(mem_total_list), else: nil
+    mem_host_avg = if length(mem_total_list) > 0, do: div(Enum.sum(mem_total_list), length(mem_total_list)), else: nil
+
+    # Used per host
+    mem_used_avg = if length(mem_used_list) > 0, do: div(Enum.sum(mem_used_list), length(mem_used_list)), else: nil
+    mem_used_median = median(mem_used_list)
+    mem_used_min_host = if length(mem_used_list) > 0, do: Enum.min(mem_used_list), else: nil
+    mem_used_max_host = if length(mem_used_list) > 0, do: Enum.max(mem_used_list), else: nil
+
     # Disk stats (host level, root only)
     disk_stats =
       nodes
@@ -381,9 +394,42 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
       host_count: host_count,
       replicas_per_host: replicas_per_host,
       cpu: %{avg: cpu_avg, min: cpu_min, max: cpu_max},
-      memory: %{total: mem_total, used: mem_used, percent: mem_percent, min: mem_min, max: mem_max},
+      memory: %{
+        total: mem_total,
+        used: mem_used,
+        percent: mem_percent,
+        min: mem_min,
+        max: mem_max,
+        # Per-host available
+        available_avg: mem_available_avg,
+        available_median: mem_available_median,
+        available_min: mem_available_min,
+        available_max: mem_available_max,
+        # Per-host sizes
+        host_min: mem_host_min,
+        host_max: mem_host_max,
+        host_avg: mem_host_avg,
+        # Per-host used
+        used_avg: mem_used_avg,
+        used_median: mem_used_median,
+        used_min: mem_used_min_host,
+        used_max: mem_used_max_host
+      },
       disk: %{total: disk_total, used: disk_used, percent: disk_percent, min: disk_min, max: disk_max}
     }
+  end
+
+  defp median([]), do: nil
+  defp median(list) do
+    sorted = Enum.sort(list)
+    len = length(sorted)
+    mid = div(len, 2)
+
+    if rem(len, 2) == 0 do
+      div(Enum.at(sorted, mid - 1) + Enum.at(sorted, mid), 2)
+    else
+      Enum.at(sorted, mid)
+    end
   end
 
   attr :summary, :map, required: true
@@ -416,29 +462,91 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
           </div>
 
           <div class="stat bg-base-300 rounded-lg p-4">
-            <div class="stat-title text-xs">Host Memory</div>
-            <div class="stat-value text-2xl">{@summary.memory.percent || "?"}%</div>
+            <div class="stat-title text-xs">Disk Usage</div>
+            <div class="stat-value text-2xl">{@summary.disk.percent || "?"}%</div>
             <div class="stat-desc">
-              {format_bytes(@summary.memory.used)} / {format_bytes(@summary.memory.total)}
+              {format_bytes(@summary.disk.used)} / {format_bytes(@summary.disk.total)}
             </div>
           </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-          <div class="bg-base-300 rounded-lg p-3">
-            <div class="text-xs opacity-70 mb-1">Memory Distribution</div>
+        <!-- Memory Section -->
+        <div class="mt-4">
+          <h3 class="text-sm font-semibold opacity-70 mb-2">Memory (per host)</h3>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Available (avg)</div>
+              <div class="text-lg font-mono font-bold text-success">{format_bytes(@summary.memory.available_avg)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Available (median)</div>
+              <div class="text-lg font-mono font-bold text-success">{format_bytes(@summary.memory.available_median)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Available (min)</div>
+              <div class="text-lg font-mono font-bold text-warning">{format_bytes(@summary.memory.available_min)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Available (max)</div>
+              <div class="text-lg font-mono font-bold">{format_bytes(@summary.memory.available_max)}</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Used (avg)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.used_avg)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Used (median)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.used_median)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Used (min)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.used_min)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Used (max)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.used_max)}</div>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Host Size (avg)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.host_avg)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Host Size (min)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.host_min)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Host Size (max)</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.host_max)}</div>
+            </div>
+            <div class="bg-base-300 rounded-lg p-3">
+              <div class="text-xs opacity-70">Total Cluster</div>
+              <div class="text-lg font-mono">{format_bytes(@summary.memory.total)}</div>
+            </div>
+          </div>
+
+          <div class="mt-3 bg-base-300 rounded-lg p-3">
+            <div class="text-xs opacity-70 mb-1">Usage Distribution ({@summary.memory.percent || "?"}% overall)</div>
             <div class="flex items-center gap-2">
               <progress
                 class={"progress flex-1 #{if @summary.memory.percent && @summary.memory.percent > 90, do: "progress-error", else: "progress-primary"}"}
                 value={@summary.memory.percent || 0}
                 max="100"
               />
-              <span class="text-sm font-mono w-20 text-right">
-                {@summary.memory.min || "?"}%-{@summary.memory.max || "?"}%
+              <span class="text-sm font-mono w-24 text-right">
+                {@summary.memory.min || "?"}% - {@summary.memory.max || "?"}%
               </span>
             </div>
           </div>
+        </div>
 
+        <!-- CPU/Disk Distribution -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
           <div class="bg-base-300 rounded-lg p-3">
             <div class="text-xs opacity-70 mb-1">CPU Distribution</div>
             <div class="flex items-center gap-2">
@@ -447,8 +555,8 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
                 value={@summary.cpu.avg || 0}
                 max="100"
               />
-              <span class="text-sm font-mono w-20 text-right">
-                {@summary.cpu.min || "?"}%-{@summary.cpu.max || "?"}%
+              <span class="text-sm font-mono w-24 text-right">
+                {@summary.cpu.min || "?"}% - {@summary.cpu.max || "?"}%
               </span>
             </div>
           </div>
@@ -461,8 +569,8 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
                 value={@summary.disk.percent || 0}
                 max="100"
               />
-              <span class="text-sm font-mono w-20 text-right">
-                {@summary.disk.min || "?"}%-{@summary.disk.max || "?"}%
+              <span class="text-sm font-mono w-24 text-right">
+                {@summary.disk.min || "?"}% - {@summary.disk.max || "?"}%
               </span>
             </div>
           </div>
