@@ -42,35 +42,52 @@ defmodule ClusterMonitor.RailwayCluster do
 
   defp discover_and_connect(%{query: query} = state) do
     Logger.info("[RailwayCluster] Polling DNS: #{query}")
+    Logger.info("[RailwayCluster] Current node: #{node()}")
 
-    ips = lookup_ips(query)
-    Logger.info("[RailwayCluster] Found #{length(ips)} IPs: #{inspect(ips)}")
+    # Get both IPv4 and IPv6, prefer IPv6 for Erlang compatibility
+    ipv6_addrs = lookup_ips(query, :aaaa)
+    ipv4_addrs = lookup_ips(query, :a)
+
+    Logger.info("[RailwayCluster] Found #{length(ipv6_addrs)} IPv6, #{length(ipv4_addrs)} IPv4 addresses")
+
+    if length(ipv6_addrs) > 0 do
+      Logger.info("[RailwayCluster] IPv6 addresses: #{inspect(Enum.take(ipv6_addrs, 5))}...")
+    end
 
     my_ip = get_my_ip()
     Logger.info("[RailwayCluster] My IP: #{my_ip}")
 
-    peer_ips = Enum.reject(ips, &(&1 == my_ip))
-    Logger.info("[RailwayCluster] Peer IPs (excluding self): #{inspect(peer_ips)}")
-
-    # Try reverse DNS to get hostnames, then connect
-    Enum.each(peer_ips, fn ip ->
-      case reverse_lookup(ip) do
-        {:ok, hostname} ->
-          node_name = :"cluster_monitor@#{hostname}"
-          Logger.info("[RailwayCluster] Resolved #{ip} -> #{hostname}")
-          try_connect(node_name)
-
-        :error ->
-          # Fallback: try IP directly (may fail)
-          Logger.warning("[RailwayCluster] No reverse DNS for #{ip}, trying direct IP")
-          try_connect(:"cluster_monitor@#{ip}")
+    # Use IPv6 addresses if available (they work with Erlang longnames via brackets)
+    peer_ips =
+      if length(ipv6_addrs) > 0 do
+        Enum.reject(ipv6_addrs, &(&1 == my_ip))
+      else
+        Enum.reject(ipv4_addrs, &(&1 == my_ip))
       end
+
+    Logger.info("[RailwayCluster] Attempting to connect to #{length(peer_ips)} peers")
+
+    # Connect to peers
+    Enum.each(peer_ips, fn ip ->
+      node_name = format_node_name(ip)
+      try_connect(node_name)
     end)
 
     connected = Node.list()
     Logger.info("[RailwayCluster] Connected nodes: #{inspect(connected)}")
 
     state
+  end
+
+  # Format node name with proper IPv6 bracket notation
+  defp format_node_name(ip) do
+    if String.contains?(ip, ":") do
+      # IPv6 - wrap in brackets
+      :"cluster_monitor@[#{ip}]"
+    else
+      # IPv4 - use as-is (will likely fail, but log it)
+      :"cluster_monitor@#{ip}"
+    end
   end
 
   defp try_connect(node_name) do
