@@ -46,10 +46,24 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
   end
 
   defp get_cpu(n) do
-    case :rpc.call(n, :cpu_sup, :util, [], 5_000) do
-      {:badrpc, _} -> nil
-      util when is_number(util) -> util
-      _ -> nil
+    util =
+      case :rpc.call(n, :cpu_sup, :util, [], 5_000) do
+        {:badrpc, _} -> nil
+        u when is_number(u) -> u
+        _ -> nil
+      end
+
+    cores =
+      case :rpc.call(n, :erlang, :system_info, [:logical_processors], 5_000) do
+        {:badrpc, _} -> nil
+        c when is_integer(c) -> c
+        _ -> nil
+      end
+
+    if util || cores do
+      %{util: util, cores: cores}
+    else
+      nil
     end
   end
 
@@ -139,17 +153,24 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
         <.stat_section title="CPU">
           <%= if @node.cpu do %>
-            <div class="flex justify-between text-sm mb-1">
-              <span>Usage</span>
-              <span>{Float.round(@node.cpu, 1)}%</span>
-            </div>
-            <progress
-              class={"progress w-full #{if @node.cpu > 90, do: "progress-error", else: "progress-primary"}"}
-              value={@node.cpu}
-              max="100"
-            />
+            <%= if @node.cpu.cores do %>
+              <div class="text-sm mb-2">{@node.cpu.cores} cores</div>
+            <% end %>
+            <%= if @node.cpu.util do %>
+              <div class="flex justify-between text-sm mb-1">
+                <span>Usage</span>
+                <span>{Float.round(@node.cpu.util, 1)}%</span>
+              </div>
+              <progress
+                class={"progress w-full #{if @node.cpu.util > 90, do: "progress-error", else: "progress-primary"}"}
+                value={@node.cpu.util}
+                max="100"
+              />
+            <% else %>
+              <div class="text-sm opacity-50">Usage unavailable</div>
+            <% end %>
           <% else %>
-            <div class="text-sm opacity-50">Unavailable (os_mon not running)</div>
+            <div class="text-sm opacity-50">Unavailable</div>
           <% end %>
         </.stat_section>
 
