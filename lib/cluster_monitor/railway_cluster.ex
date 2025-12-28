@@ -101,28 +101,8 @@ defmodule ClusterMonitor.RailwayCluster do
     end
   end
 
-  defp reverse_lookup(ip) do
-    # Parse IP string to tuple
-    case :inet.parse_address(~c"#{ip}") do
-      {:ok, ip_tuple} ->
-        case :inet.gethostbyaddr(ip_tuple) do
-          {:ok, {:hostent, hostname, _, _, _, _}} ->
-            {:ok, to_string(hostname)}
-          {:error, reason} ->
-            Logger.debug("[RailwayCluster] Reverse DNS failed for #{ip}: #{inspect(reason)}")
-            :error
-        end
-      _ ->
-        :error
-    end
-  end
-
-  defp lookup_ips(query) do
-    # Try both A and AAAA records
-    a_records = do_lookup(query, :a)
-    aaaa_records = do_lookup(query, :aaaa)
-
-    (a_records ++ aaaa_records)
+  defp lookup_ips(query, type) when type in [:a, :aaaa] do
+    do_lookup(query, type)
     |> Enum.map(&format_ip/1)
     |> Enum.uniq()
   end
