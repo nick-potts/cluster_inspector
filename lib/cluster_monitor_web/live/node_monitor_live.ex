@@ -8,19 +8,19 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
   def mount(_params, _session, socket) do
     if connected?(socket) do
       :timer.send_interval(@refresh_interval, self(), :refresh)
+      # Trigger immediate async load
+      send(self(), :refresh)
     end
 
-    nodes = fetch_all_nodes(%{})
-    cpu_history = init_cpu_history(nodes)
-
-    {:ok, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: %{})}
+    # Start with empty state - data loads async after connect
+    {:ok, assign(socket, nodes: [], cpu_history: %{}, cpu_samples: %{}, loading: true)}
   end
 
   @impl true
   def handle_info(:refresh, socket) do
     {nodes, new_samples} = fetch_all_nodes_with_cpu(socket.assigns.cpu_samples)
     cpu_history = update_cpu_history(socket.assigns.cpu_history, nodes)
-    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: new_samples)}
+    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: new_samples, loading: false)}
   end
 
   defp init_cpu_history(nodes) do
@@ -303,11 +303,18 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     <div class="space-y-6">
       <h1 class="text-2xl font-bold">Cluster Node Monitor</h1>
 
-      <.cluster_summary summary={@summary} />
+      <%= if @loading do %>
+        <div class="flex items-center justify-center py-12">
+          <span class="loading loading-spinner loading-lg"></span>
+          <span class="ml-3 text-lg">Loading cluster data...</span>
+        </div>
+      <% else %>
+        <.cluster_summary summary={@summary} />
 
-      <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        <.node_card :for={node <- @nodes} node={node} cpu_history={Map.get(@cpu_history, node.name, [])} />
-      </div>
+        <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          <.node_card :for={node <- @nodes} node={node} cpu_history={Map.get(@cpu_history, node.name, [])} />
+        </div>
+      <% end %>
     </div>
     """
   end
