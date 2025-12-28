@@ -43,14 +43,9 @@ defmodule ClusterMonitor.DNSPollIPv6 do
   def handle_info(_, state), do: {:noreply, state}
 
   defp discover_nodes(query, basename) do
-    # Get IPv6 addresses
-    ipv6 = dns_lookup(query, :aaaa) |> Enum.map(&format_ipv6_node(&1, basename))
-
-    # Get IPv4 addresses as fallback
-    ipv4 = dns_lookup(query, :a) |> Enum.map(&format_ipv4_node(&1, basename))
-
-    # Prefer IPv6, dedupe, remove self
-    (ipv6 ++ ipv4)
+    # Get IPv6 addresses only (Railway uses IPv6 internally)
+    dns_lookup(query, :aaaa)
+    |> Enum.map(&format_node(&1, basename))
     |> Enum.uniq()
     |> Enum.reject(&(&1 == node()))
   end
@@ -64,12 +59,8 @@ defmodule ClusterMonitor.DNSPollIPv6 do
     end
   end
 
-  defp format_ipv6_node(ip, basename) do
+  defp format_node(ip, basename) do
     # With -proto_dist inet6_tcp, no brackets needed
-    :"#{basename}@#{ip}"
-  end
-
-  defp format_ipv4_node(ip, basename) do
     :"#{basename}@#{ip}"
   end
 end
