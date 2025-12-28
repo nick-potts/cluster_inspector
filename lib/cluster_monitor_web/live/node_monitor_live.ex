@@ -296,12 +296,164 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
 
   @impl true
   def render(assigns) do
+    summary = compute_summary(assigns.nodes)
+    assigns = assign(assigns, :summary, summary)
+
     ~H"""
     <div class="space-y-6">
       <h1 class="text-2xl font-bold">Cluster Node Monitor</h1>
 
+      <.cluster_summary summary={@summary} />
+
       <div class="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <.node_card :for={node <- @nodes} node={node} cpu_history={Map.get(@cpu_history, node.name, [])} />
+      </div>
+    </div>
+    """
+  end
+
+  defp compute_summary(nodes) do
+    node_count = length(nodes)
+
+    # Extract unique hosts (by memory total - same host = same memory)
+    hosts =
+      nodes
+      |> Enum.map(fn n -> n.memory && n.memory.total end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    host_count = length(hosts)
+
+    # CPU stats
+    cpu_values = nodes |> Enum.map(fn n -> n.cpu && n.cpu.util end) |> Enum.reject(&is_nil/1)
+    cpu_avg = if length(cpu_values) > 0, do: Float.round(Enum.sum(cpu_values) / length(cpu_values), 1), else: nil
+    cpu_min = if length(cpu_values) > 0, do: Enum.min(cpu_values), else: nil
+    cpu_max = if length(cpu_values) > 0, do: Enum.max(cpu_values), else: nil
+
+    # Memory stats (host level)
+    mem_stats =
+      nodes
+      |> Enum.map(fn n -> n.memory end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(fn m -> m.total end)
+
+    mem_total = Enum.sum(Enum.map(mem_stats, & &1.total))
+    mem_used = Enum.sum(Enum.map(mem_stats, & &1.used))
+    mem_percent = if mem_total > 0, do: Float.round(mem_used / mem_total * 100, 1), else: nil
+
+    mem_percents = Enum.map(mem_stats, & &1.percent)
+    mem_min = if length(mem_percents) > 0, do: Enum.min(mem_percents), else: nil
+    mem_max = if length(mem_percents) > 0, do: Enum.max(mem_percents), else: nil
+
+    # Disk stats (host level, root only)
+    disk_stats =
+      nodes
+      |> Enum.flat_map(fn n -> n.disk || [] end)
+      |> Enum.filter(fn d -> d.mount == "/" end)
+      |> Enum.uniq_by(fn d -> d.total end)
+
+    disk_total = Enum.sum(Enum.map(disk_stats, & &1.total))
+    disk_used = Enum.sum(Enum.map(disk_stats, & &1.used))
+    disk_percent = if disk_total > 0, do: Float.round(disk_used / disk_total * 100, 1), else: nil
+
+    disk_percents = Enum.map(disk_stats, & &1.percent_used)
+    disk_min = if length(disk_percents) > 0, do: Enum.min(disk_percents), else: nil
+    disk_max = if length(disk_percents) > 0, do: Enum.max(disk_percents), else: nil
+
+    # Replicas per host
+    replicas_per_host = if host_count > 0, do: Float.round(node_count / host_count, 1), else: nil
+
+    %{
+      node_count: node_count,
+      host_count: host_count,
+      replicas_per_host: replicas_per_host,
+      cpu: %{avg: cpu_avg, min: cpu_min, max: cpu_max},
+      memory: %{total: mem_total, used: mem_used, percent: mem_percent, min: mem_min, max: mem_max},
+      disk: %{total: disk_total, used: disk_used, percent: disk_percent, min: disk_min, max: disk_max}
+    }
+  end
+
+  attr :summary, :map, required: true
+
+  defp cluster_summary(assigns) do
+    ~H"""
+    <div class="card bg-base-200 shadow-xl">
+      <div class="card-body">
+        <h2 class="card-title">Cluster Summary</h2>
+
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
+          <div class="stat bg-base-300 rounded-lg p-4">
+            <div class="stat-title text-xs">Replicas</div>
+            <div class="stat-value text-2xl">{@summary.node_count}</div>
+            <div class="stat-desc">{@summary.host_count} unique hosts</div>
+          </div>
+
+          <div class="stat bg-base-300 rounded-lg p-4">
+            <div class="stat-title text-xs">Bin Packing</div>
+            <div class="stat-value text-2xl">{@summary.replicas_per_host || "?"}</div>
+            <div class="stat-desc">replicas/host avg</div>
+          </div>
+
+          <div class="stat bg-base-300 rounded-lg p-4">
+            <div class="stat-title text-xs">CPU Usage</div>
+            <div class="stat-value text-2xl">{@summary.cpu.avg || "?"}%</div>
+            <div class="stat-desc">
+              min {@summary.cpu.min || "?"}% / max {@summary.cpu.max || "?"}%
+            </div>
+          </div>
+
+          <div class="stat bg-base-300 rounded-lg p-4">
+            <div class="stat-title text-xs">Host Memory</div>
+            <div class="stat-value text-2xl">{@summary.memory.percent || "?"}%</div>
+            <div class="stat-desc">
+              {format_bytes(@summary.memory.used)} / {format_bytes(@summary.memory.total)}
+            </div>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+          <div class="bg-base-300 rounded-lg p-3">
+            <div class="text-xs opacity-70 mb-1">Memory Distribution</div>
+            <div class="flex items-center gap-2">
+              <progress
+                class={"progress flex-1 #{if @summary.memory.percent && @summary.memory.percent > 90, do: "progress-error", else: "progress-primary"}"}
+                value={@summary.memory.percent || 0}
+                max="100"
+              />
+              <span class="text-sm font-mono w-20 text-right">
+                {@summary.memory.min || "?"}%-{@summary.memory.max || "?"}%
+              </span>
+            </div>
+          </div>
+
+          <div class="bg-base-300 rounded-lg p-3">
+            <div class="text-xs opacity-70 mb-1">CPU Distribution</div>
+            <div class="flex items-center gap-2">
+              <progress
+                class={"progress flex-1 #{if @summary.cpu.avg && @summary.cpu.avg > 90, do: "progress-error", else: "progress-primary"}"}
+                value={@summary.cpu.avg || 0}
+                max="100"
+              />
+              <span class="text-sm font-mono w-20 text-right">
+                {@summary.cpu.min || "?"}%-{@summary.cpu.max || "?"}%
+              </span>
+            </div>
+          </div>
+
+          <div class="bg-base-300 rounded-lg p-3">
+            <div class="text-xs opacity-70 mb-1">Disk Distribution</div>
+            <div class="flex items-center gap-2">
+              <progress
+                class={"progress flex-1 #{if @summary.disk.percent && @summary.disk.percent > 90, do: "progress-error", else: "progress-primary"}"}
+                value={@summary.disk.percent || 0}
+                max="100"
+              />
+              <span class="text-sm font-mono w-20 text-right">
+                {@summary.disk.min || "?"}%-{@summary.disk.max || "?"}%
+              </span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     """
