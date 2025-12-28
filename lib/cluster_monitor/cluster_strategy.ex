@@ -65,8 +65,8 @@ defmodule ClusterMonitor.DNSPollIPv6 do
   end
 
   defp format_ipv6_node(ip, basename) do
-    # IPv6 addresses need brackets in Erlang node names
-    :"#{basename}@[#{ip}]"
+    # With -proto_dist inet6_tcp, no brackets needed
+    :"#{basename}@#{ip}"
   end
 
   defp format_ipv4_node(ip, basename) do
