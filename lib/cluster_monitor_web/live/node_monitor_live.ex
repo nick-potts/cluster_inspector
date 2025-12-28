@@ -10,17 +10,17 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
       :timer.send_interval(@refresh_interval, self(), :refresh)
     end
 
-    nodes = fetch_all_nodes()
+    nodes = fetch_all_nodes(%{})
     cpu_history = init_cpu_history(nodes)
 
-    {:ok, assign(socket, nodes: nodes, cpu_history: cpu_history)}
+    {:ok, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: %{})}
   end
 
   @impl true
   def handle_info(:refresh, socket) do
-    nodes = fetch_all_nodes()
+    {nodes, new_samples} = fetch_all_nodes_with_cpu(socket.assigns.cpu_samples)
     cpu_history = update_cpu_history(socket.assigns.cpu_history, nodes)
-    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history)}
+    {:noreply, assign(socket, nodes: nodes, cpu_history: cpu_history, cpu_samples: new_samples)}
   end
 
   defp init_cpu_history(nodes) do
@@ -36,20 +36,32 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     end)
   end
 
-  defp fetch_all_nodes do
-    nodes = [node() | Node.list()]
+  defp fetch_all_nodes(prev_samples) do
+    {nodes, _} = fetch_all_nodes_with_cpu(prev_samples)
+    nodes
+  end
 
-    Enum.map(nodes, fn n ->
-      %{
-        name: n,
-        memory: get_memory(n),
-        cpu: get_cpu(n),
-        disk: get_disk(n),
-        containers: get_containers(n),
-        system: get_system_info(n),
-        network: get_network_info(n)
-      }
-    end)
+  defp fetch_all_nodes_with_cpu(prev_samples) do
+    node_list = [node() | Node.list()]
+
+    {nodes, new_samples} =
+      Enum.map_reduce(node_list, prev_samples, fn n, samples ->
+        {cpu, new_sample} = get_cpu_with_sample(n, Map.get(samples, n))
+
+        node_data = %{
+          name: n,
+          memory: get_memory(n),
+          cpu: cpu,
+          disk: get_disk(n),
+          containers: get_containers(n),
+          system: get_system_info(n),
+          network: get_network_info(n)
+        }
+
+        {node_data, Map.put(samples, n, new_sample)}
+      end)
+
+    {nodes, new_samples}
   end
 
   defp get_memory(n) do
@@ -71,14 +83,14 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
     end
   end
 
-  defp get_cpu(n) do
-    util =
-      case :rpc.call(n, :cpu_sup, :util, [], 5_000) do
-        {:badrpc, _} -> nil
-        u when is_number(u) -> u
-        _ -> nil
-      end
+  def sample_cpu do
+    # First call initializes, second call gets actual reading
+    :cpu_sup.util()
+    Process.sleep(10)
+    :cpu_sup.util()
+  end
 
+  defp get_cpu_with_sample(n, _prev_sample) do
     cores =
       case :rpc.call(n, :erlang, :system_info, [:logical_processors], 5_000) do
         {:badrpc, _} -> nil
@@ -86,11 +98,17 @@ defmodule ClusterMonitorWeb.NodeMonitorLive do
         _ -> nil
       end
 
-    if util || cores do
-      %{util: util, cores: cores}
-    else
-      nil
-    end
+    # cpu_sup:util() - call twice with delay to get fresh reading
+    util =
+      case :rpc.call(n, __MODULE__, :sample_cpu, [], 5_000) do
+        {:badrpc, _} -> nil
+        u when is_float(u) -> Float.round(u, 1)
+        u when is_integer(u) -> u * 1.0
+        _ -> nil
+      end
+
+    cpu = if util || cores, do: %{util: util, cores: cores}, else: nil
+    {cpu, nil}
   end
 
   defp get_disk(n) do

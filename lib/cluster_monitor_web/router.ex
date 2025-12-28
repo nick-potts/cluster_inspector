@@ -20,6 +20,8 @@ defmodule ClusterMonitorWeb.Router do
     live "/", NodeMonitorLive
   end
 
+  get "/healthz", ClusterMonitorWeb.HealthController, :index
+
   # Other scopes may use custom stacks.
   # scope "/api", ClusterMonitorWeb do
   #   pipe_through :api
