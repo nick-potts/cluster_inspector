@@ -36,8 +36,20 @@ if config_env() == :prod do
   host = System.get_env("PHX_HOST") || System.get_env("RAILWAY_PUBLIC_DOMAIN") || "example.com"
   port = String.to_integer(System.get_env("PORT") || "4000")
 
-  config :cluster_monitor, :dns_cluster_query,
-    System.get_env("DNS_CLUSTER_QUERY") || System.get_env("RAILWAY_PRIVATE_DOMAIN")
+  # Clustering configuration
+  dns_query = System.get_env("DNS_CLUSTER_QUERY") || System.get_env("RAILWAY_PRIVATE_DOMAIN")
+
+  if dns_query do
+    config :cluster_monitor, :cluster_topologies,
+      railway: [
+        strategy: Cluster.Strategy.DNSPoll,
+        config: [
+          polling_interval: 5_000,
+          query: dns_query,
+          node_basename: "cluster_monitor"
+        ]
+      ]
+  end
 
   config :cluster_monitor, ClusterMonitorWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],

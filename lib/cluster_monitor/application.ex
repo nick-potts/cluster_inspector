@@ -7,9 +7,11 @@ defmodule ClusterMonitor.Application do
 
   @impl true
   def start(_type, _args) do
+    topologies = Application.get_env(:cluster_monitor, :cluster_topologies, [])
+
     children = [
       ClusterMonitorWeb.Telemetry,
-      {DNSCluster, query: Application.get_env(:cluster_monitor, :dns_cluster_query) || :ignore},
+      {Cluster.Supervisor, [topologies, [name: ClusterMonitor.ClusterSupervisor]]},
       {Phoenix.PubSub, name: ClusterMonitor.PubSub},
       # Start a worker by calling: ClusterMonitor.Worker.start_link(arg)
       # {ClusterMonitor.Worker, arg},
